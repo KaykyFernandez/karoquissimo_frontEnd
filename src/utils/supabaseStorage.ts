@@ -1,35 +1,17 @@
-import { createClient } from '@supabase/supabase-js';
-
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
-const supabaseKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string;
-
-const supabase = createClient(supabaseUrl, supabaseKey);
-
-const BUCKET = 'produtos';
+import { api } from '../services/api';
+import type { Produto } from '../services/produtos.service';
 
 /**
- * Faz upload de uma imagem para o Supabase Storage.
- * Retorna a URL pública da imagem.
+ * Faz upload de foto para o backend, que repassa ao Supabase Storage
+ * usando a service_role key (segura, nunca exposta no frontend).
  */
-export async function uploadProdutoFoto(file: File, produtoCode: string): Promise<string> {
-  const ext = file.name.split('.').pop();
-  const fileName = `${produtoCode}-${Date.now()}.${ext}`;
+export async function uploadProdutoFoto(produtoId: number, file: File): Promise<Produto> {
+  const formData = new FormData();
+  formData.append('foto', file);
 
-  const { error } = await supabase.storage
-    .from(BUCKET)
-    .upload(fileName, file, { upsert: true, contentType: file.type });
+  const response = await api.patch<Produto>(`/produtos/${produtoId}/foto`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
 
-  if (error) throw new Error(`Erro ao fazer upload: ${error.message}`);
-
-  // Constrói a URL pública manualmente para garantir o caminho correto com /public/
-  return `${supabaseUrl}/storage/v1/object/public/${BUCKET}/${fileName}`;
-}
-
-/**
- * Remove uma foto do Supabase Storage pela URL pública.
- */
-export async function deleteProdutoFoto(photoUrl: string): Promise<void> {
-  const fileName = photoUrl.split('/').pop();
-  if (!fileName) return;
-  await supabase.storage.from(BUCKET).remove([fileName]);
+  return response.data;
 }

@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { categoriasService, produtosService } from '../services/produtos.service';
 import type { Categoria, Produto } from '../services/produtos.service';
 import { uploadProdutoFoto } from '../utils/supabaseStorage';
+import type { Produto as ProdutoType } from '../services/produtos.service';
 
 const produtoSchema = z.object({
   code: z.string().min(1, 'Informe o código').max(50),
@@ -128,19 +129,11 @@ export function Produtos() {
 
   const createMutation = useMutation({
     mutationFn: (data: ReturnType<typeof toProdutoPayload>) => produtosService.create(data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['produtos'] });
-      closeProductModal();
-    },
   });
 
   const updateMutation = useMutation({
     mutationFn: ({ id, data }: { id: number; data: ReturnType<typeof toProdutoPayload> }) =>
       produtosService.update(id, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['produtos'] });
-      closeProductModal();
-    },
   });
 
   const stockMutation = useMutation({
@@ -209,35 +202,34 @@ export function Produtos() {
   };
 
   const handleProductSubmit = async (data: ProdutoFormData) => {
-    let photoUrl: string | null | undefined = undefined;
+    try {
+      let saved: ProdutoType;
 
-    // Se selecionou novo arquivo, faz upload
-    if (photoFile) {
-      try {
-        setUploadingPhoto(true);
-        photoUrl = await uploadProdutoFoto(photoFile, data.code);
-      } catch {
-        alert('Erro ao fazer upload da foto. Verifique sua conexão e tente novamente.');
-        setUploadingPhoto(false);
-        return;
-      } finally {
-        setUploadingPhoto(false);
+      const payload = toProdutoPayload(data);
+
+      if (editingProduto) {
+        saved = await updateMutation.mutateAsync({ id: editingProduto.id, data: payload });
+      } else {
+        saved = await createMutation.mutateAsync(payload);
       }
-    } else if (photoPreview === null && editingProduto?.photoUrl) {
-      // Foto removida no edit
-      photoUrl = null;
-    } else if (editingProduto?.photoUrl) {
-      // Mantém a foto atual
-      photoUrl = editingProduto.photoUrl;
-    }
 
-    const payload = toProdutoPayload(data, photoUrl);
+      // Se selecionou nova foto, envia para o backend
+      if (photoFile) {
+        try {
+          setUploadingPhoto(true);
+          await uploadProdutoFoto(saved.id, photoFile);
+        } catch {
+          alert('Produto salvo, mas houve erro ao fazer upload da foto. Tente novamente pelo botão de editar.');
+        } finally {
+          setUploadingPhoto(false);
+        }
+      }
 
-    if (editingProduto) {
-      updateMutation.mutate({ id: editingProduto.id, data: payload });
-      return;
+      queryClient.invalidateQueries({ queryKey: ['produtos'] });
+      closeProductModal();
+    } catch {
+      // erro exibido pelo mutation.isError no form
     }
-    createMutation.mutate(payload);
   };
 
   const handleStockSubmit = (data: EstoqueFormData) => {
