@@ -1,11 +1,12 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
-import { Edit2, Loader2, PackagePlus, Plus, Search, SlidersHorizontal, X } from 'lucide-react';
+import { Edit2, ImagePlus, Loader2, PackagePlus, Plus, Search, SlidersHorizontal, X } from 'lucide-react';
 import { z } from 'zod';
 import { categoriasService, produtosService } from '../services/produtos.service';
 import type { Categoria, Produto } from '../services/produtos.service';
+import { uploadProdutoFoto } from '../utils/supabaseStorage';
 
 const produtoSchema = z.object({
   code: z.string().min(1, 'Informe o código').max(50),
@@ -53,10 +54,7 @@ const movementLabels: Record<EstoqueFormData['type'], string> = {
 };
 
 function formatCurrency(value: string | number) {
-  return new Intl.NumberFormat('pt-BR', {
-    style: 'currency',
-    currency: 'BRL',
-  }).format(Number(value));
+  return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(Number(value));
 }
 
 function toDateInput(value?: string) {
@@ -77,7 +75,7 @@ function toProdutoForm(produto: Produto): ProdutoFormData {
   };
 }
 
-function toProdutoPayload(data: ProdutoFormData) {
+function toProdutoPayload(data: ProdutoFormData, photoUrl?: string | null) {
   return {
     code: data.code.trim(),
     name: data.name.trim(),
@@ -88,6 +86,7 @@ function toProdutoPayload(data: ProdutoFormData) {
     units: data.units,
     supplier: data.supplier.trim(),
     expirationDate: data.expirationDate || undefined,
+    ...(photoUrl !== undefined ? { photoUrl } : {}),
   };
 }
 
@@ -98,6 +97,13 @@ export function Produtos() {
   const [stockModalOpen, setStockModalOpen] = useState(false);
   const [editingProduto, setEditingProduto] = useState<Produto | null>(null);
   const [stockProduto, setStockProduto] = useState<Produto | null>(null);
+
+  // foto
+  const [photoFile, setPhotoFile] = useState<File | null>(null);
+  const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   const queryClient = useQueryClient();
 
   const produtosQuery = useQuery({
@@ -146,17 +152,17 @@ export function Produtos() {
     },
   });
 
-  const categories = useMemo<Categoria[]>(
-    () => categoriasQuery.data ?? [],
-    [categoriasQuery.data],
-  );
+  const categories = useMemo<Categoria[]>(() => categoriasQuery.data ?? [], [categoriasQuery.data]);
 
   useEffect(() => {
     if (editingProduto) {
       produtoForm.reset(toProdutoForm(editingProduto));
+      setPhotoPreview(editingProduto.photoUrl ?? null);
     } else {
       produtoForm.reset(emptyProdutoForm);
+      setPhotoPreview(null);
     }
+    setPhotoFile(null);
   }, [editingProduto, produtoForm]);
 
   const openCreateModal = () => {
@@ -172,6 +178,8 @@ export function Produtos() {
   const closeProductModal = () => {
     setProductModalOpen(false);
     setEditingProduto(null);
+    setPhotoFile(null);
+    setPhotoPreview(null);
     produtoForm.reset(emptyProdutoForm);
   };
 
@@ -187,8 +195,44 @@ export function Produtos() {
     estoqueForm.reset(emptyEstoqueForm);
   };
 
-  const handleProductSubmit = (data: ProdutoFormData) => {
-    const payload = toProdutoPayload(data);
+  const handlePhotoChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setPhotoFile(file);
+    setPhotoPreview(URL.createObjectURL(file));
+  };
+
+  const handleRemovePhoto = () => {
+    setPhotoFile(null);
+    setPhotoPreview(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const handleProductSubmit = async (data: ProdutoFormData) => {
+    let photoUrl: string | null | undefined = undefined;
+
+    // Se selecionou novo arquivo, faz upload
+    if (photoFile) {
+      try {
+        setUploadingPhoto(true);
+        photoUrl = await uploadProdutoFoto(photoFile, data.code);
+      } catch {
+        alert('Erro ao fazer upload da foto. Verifique sua conexão e tente novamente.');
+        setUploadingPhoto(false);
+        return;
+      } finally {
+        setUploadingPhoto(false);
+      }
+    } else if (photoPreview === null && editingProduto?.photoUrl) {
+      // Foto removida no edit
+      photoUrl = null;
+    } else if (editingProduto?.photoUrl) {
+      // Mantém a foto atual
+      photoUrl = editingProduto.photoUrl;
+    }
+
+    const payload = toProdutoPayload(data, photoUrl);
+
     if (editingProduto) {
       updateMutation.mutate({ id: editingProduto.id, data: payload });
       return;
@@ -224,6 +268,8 @@ export function Produtos() {
     { name: 'expirationDate', label: 'Validade', type: 'date' },
   ];
 
+  const isSaving = uploadingPhoto || createMutation.isPending || updateMutation.isPending;
+
   return (
     <div className="space-y-6 bg-white text-slate-800">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -258,9 +304,7 @@ export function Produtos() {
         >
           <option value="">Todas as categorias</option>
           {categories.map(category => (
-            <option key={category.id} value={category.id}>
-              {category.name}
-            </option>
+            <option key={category.id} value={category.id}>{category.name}</option>
           ))}
         </select>
       </div>
@@ -270,6 +314,7 @@ export function Produtos() {
           <table className="min-w-full divide-y divide-slate-200 text-sm">
             <thead className="bg-slate-50">
               <tr>
+                <th className="px-4 py-3 text-left font-semibold text-slate-800">Foto</th>
                 <th className="px-4 py-3 text-left font-semibold text-slate-800">Código</th>
                 <th className="px-4 py-3 text-left font-semibold text-slate-800">Nome</th>
                 <th className="px-4 py-3 text-left font-semibold text-slate-800">Categoria</th>
@@ -283,30 +328,34 @@ export function Produtos() {
             <tbody className="divide-y divide-slate-200 bg-white">
               {produtosQuery.isLoading && (
                 <tr>
-                  <td colSpan={8} className="px-4 py-8 text-center text-slate-500">
-                    Carregando produtos...
-                  </td>
+                  <td colSpan={9} className="px-4 py-8 text-center text-slate-500">Carregando produtos...</td>
                 </tr>
               )}
-
               {produtosQuery.isError && (
                 <tr>
-                  <td colSpan={8} className="px-4 py-8 text-center text-red-600">
-                    Não foi possível carregar os produtos.
-                  </td>
+                  <td colSpan={9} className="px-4 py-8 text-center text-red-600">Não foi possível carregar os produtos.</td>
                 </tr>
               )}
-
               {produtosQuery.data?.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="px-4 py-8 text-center text-slate-500">
-                    Nenhum produto encontrado.
-                  </td>
+                  <td colSpan={9} className="px-4 py-8 text-center text-slate-500">Nenhum produto encontrado.</td>
                 </tr>
               )}
-
               {produtosQuery.data?.map(produto => (
                 <tr key={produto.id} className="hover:bg-slate-50">
+                  <td className="px-4 py-3">
+                    {produto.photoUrl ? (
+                      <img
+                        src={produto.photoUrl}
+                        alt={produto.name}
+                        className="h-10 w-10 rounded-md object-cover border border-slate-200"
+                      />
+                    ) : (
+                      <div className="h-10 w-10 rounded-md border border-slate-200 bg-slate-100 flex items-center justify-center">
+                        <ImagePlus size={16} className="text-slate-400" />
+                      </div>
+                    )}
+                  </td>
                   <td className="px-4 py-3 font-medium text-slate-800">{produto.code}</td>
                   <td className="px-4 py-3 text-slate-800">{produto.name}</td>
                   <td className="px-4 py-3 text-slate-500">{produto.category.name}</td>
@@ -343,6 +392,7 @@ export function Produtos() {
         </div>
       </div>
 
+      {/* Modal Produto */}
       {productModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
           <div className="max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-md border border-slate-200 bg-white shadow-xl">
@@ -364,6 +414,58 @@ export function Produtos() {
             </div>
 
             <form onSubmit={produtoForm.handleSubmit(handleProductSubmit)} className="space-y-5 px-6 py-5">
+              {/* Campo de foto */}
+              <div className="space-y-1.5">
+                <span className="text-sm font-medium text-slate-800">Foto do Produto <span className="text-slate-400 font-normal">(opcional)</span></span>
+                <div className="flex items-center gap-4">
+                  {photoPreview ? (
+                    <div className="relative">
+                      <img
+                        src={photoPreview}
+                        alt="Preview"
+                        className="h-24 w-24 rounded-md object-cover border border-slate-200"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleRemovePhoto}
+                        className="absolute -top-2 -right-2 flex h-5 w-5 items-center justify-center rounded-full bg-red-500 text-white"
+                        title="Remover foto"
+                      >
+                        <X size={12} />
+                      </button>
+                    </div>
+                  ) : (
+                    <div
+                      onClick={() => fileInputRef.current?.click()}
+                      className="flex h-24 w-24 cursor-pointer flex-col items-center justify-center rounded-md border-2 border-dashed border-slate-300 bg-slate-50 text-slate-400 transition-colors hover:border-amber-500 hover:text-amber-500"
+                    >
+                      <ImagePlus size={24} />
+                      <span className="mt-1 text-xs">Adicionar</span>
+                    </div>
+                  )}
+                  <div className="text-xs text-slate-500 space-y-1">
+                    <p>Formatos aceitos: JPG, PNG, WEBP</p>
+                    <p>Tamanho máximo: 5MB</p>
+                    {photoPreview && (
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        className="text-amber-600 hover:underline"
+                      >
+                        Trocar foto
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  className="hidden"
+                  onChange={handlePhotoChange}
+                />
+              </div>
+
               <div className="grid gap-4 md:grid-cols-2">
                 <label className="space-y-1.5">
                   <span className="text-sm font-medium text-slate-800">Categoria</span>
@@ -373,15 +475,11 @@ export function Produtos() {
                   >
                     <option value={0}>Selecione</option>
                     {categories.map(category => (
-                      <option key={category.id} value={category.id}>
-                        {category.name}
-                      </option>
+                      <option key={category.id} value={category.id}>{category.name}</option>
                     ))}
                   </select>
                   {produtoForm.formState.errors.categoryId && (
-                    <span className="block text-xs text-red-600">
-                      {produtoForm.formState.errors.categoryId.message}
-                    </span>
+                    <span className="block text-xs text-red-600">{produtoForm.formState.errors.categoryId.message}</span>
                   )}
                 </label>
 
@@ -395,9 +493,7 @@ export function Produtos() {
                       className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-800 outline-none transition-colors placeholder:text-slate-500 focus:border-amber-600 focus:ring-2 focus:ring-amber-600/20"
                     />
                     {produtoForm.formState.errors[field.name] && (
-                      <span className="block text-xs text-red-600">
-                        {produtoForm.formState.errors[field.name]?.message}
-                      </span>
+                      <span className="block text-xs text-red-600">{produtoForm.formState.errors[field.name]?.message}</span>
                     )}
                   </label>
                 ))}
@@ -419,13 +515,11 @@ export function Produtos() {
                 </button>
                 <button
                   type="submit"
-                  disabled={createMutation.isPending || updateMutation.isPending}
+                  disabled={isSaving}
                   className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-amber-600 px-4 text-sm font-semibold text-white transition-colors hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-70"
                 >
-                  {(createMutation.isPending || updateMutation.isPending) && (
-                    <Loader2 size={16} className="animate-spin" />
-                  )}
-                  Salvar Produto
+                  {isSaving && <Loader2 size={16} className="animate-spin" />}
+                  {uploadingPhoto ? 'Enviando foto...' : 'Salvar Produto'}
                 </button>
               </div>
             </form>
@@ -433,15 +527,14 @@ export function Produtos() {
         </div>
       )}
 
+      {/* Modal Estoque */}
       {stockModalOpen && stockProduto && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
           <div className="w-full max-w-lg rounded-md border border-slate-200 bg-white shadow-xl">
             <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
               <div>
                 <h2 className="text-lg font-semibold text-slate-800">Ajuste de Estoque</h2>
-                <p className="text-sm text-slate-500">
-                  {stockProduto.code} - {stockProduto.name}
-                </p>
+                <p className="text-sm text-slate-500">{stockProduto.code} - {stockProduto.name}</p>
               </div>
               <button
                 type="button"
@@ -461,9 +554,7 @@ export function Produtos() {
                   className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-800 outline-none focus:border-amber-600 focus:ring-2 focus:ring-amber-600/20"
                 >
                   {Object.entries(movementLabels).map(([value, label]) => (
-                    <option key={value} value={value}>
-                      {label}
-                    </option>
+                    <option key={value} value={value}>{label}</option>
                   ))}
                 </select>
               </label>
@@ -477,9 +568,7 @@ export function Produtos() {
                   className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-800 outline-none focus:border-amber-600 focus:ring-2 focus:ring-amber-600/20"
                 />
                 {estoqueForm.formState.errors.quantity && (
-                  <span className="block text-xs text-red-600">
-                    {estoqueForm.formState.errors.quantity.message}
-                  </span>
+                  <span className="block text-xs text-red-600">{estoqueForm.formState.errors.quantity.message}</span>
                 )}
               </label>
 
@@ -491,9 +580,7 @@ export function Produtos() {
                   className="w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 outline-none focus:border-amber-600 focus:ring-2 focus:ring-amber-600/20"
                 />
                 {estoqueForm.formState.errors.reason && (
-                  <span className="block text-xs text-red-600">
-                    {estoqueForm.formState.errors.reason.message}
-                  </span>
+                  <span className="block text-xs text-red-600">{estoqueForm.formState.errors.reason.message}</span>
                 )}
               </label>
 
@@ -516,11 +603,7 @@ export function Produtos() {
                   disabled={stockMutation.isPending}
                   className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-amber-600 px-4 text-sm font-semibold text-white transition-colors hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-70"
                 >
-                  {stockMutation.isPending ? (
-                    <Loader2 size={16} className="animate-spin" />
-                  ) : (
-                    <PackagePlus size={16} />
-                  )}
+                  {stockMutation.isPending ? <Loader2 size={16} className="animate-spin" /> : <PackagePlus size={16} />}
                   Confirmar Ajuste
                 </button>
               </div>

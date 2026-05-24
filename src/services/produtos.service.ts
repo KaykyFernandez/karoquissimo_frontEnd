@@ -12,6 +12,7 @@ export interface Produto {
   units: number;
   supplier: string;
   expirationDate?: string;
+  photoUrl?: string | null;
   createdAt: string;
   updatedAt: string;
 }
