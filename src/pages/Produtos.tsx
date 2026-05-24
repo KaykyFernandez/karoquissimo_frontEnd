@@ -110,13 +110,13 @@ export function Produtos() {
     queryFn: categoriasService.list,
   });
 
-  const produtoForm = useForm<ProdutoFormData>({
-    resolver: zodResolver(produtoSchema),
+  const produtoForm = useForm<ProdutoFormData, unknown, ProdutoFormData>({
+    resolver: zodResolver(produtoSchema) as any,
     defaultValues: emptyProdutoForm,
   });
 
-  const estoqueForm = useForm<EstoqueFormData>({
-    resolver: zodResolver(estoqueSchema),
+  const estoqueForm = useForm<EstoqueFormData, unknown, EstoqueFormData>({
+    resolver: zodResolver(estoqueSchema) as any,
     defaultValues: emptyEstoqueForm,
   });
 
