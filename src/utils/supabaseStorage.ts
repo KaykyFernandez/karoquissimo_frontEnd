@@ -21,8 +21,8 @@ export async function uploadProdutoFoto(file: File, produtoCode: string): Promis
 
   if (error) throw new Error(`Erro ao fazer upload: ${error.message}`);
 
-  const { data } = supabase.storage.from(BUCKET).getPublicUrl(fileName);
-  return data.publicUrl;
+  // Constrói a URL pública manualmente para garantir o caminho correto com /public/
+  return `${supabaseUrl}/storage/v1/object/public/${BUCKET}/${fileName}`;
 }
 
 /**
