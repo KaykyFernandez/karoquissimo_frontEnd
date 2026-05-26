@@ -1,0 +1,14 @@
+name: Keep Vercel Awake
+
+on:
+  schedule:
+    - cron: "*/14 * * * *"
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Ping site
+        run: |
+          curl -L https://codarastock.vercel.app/api/ping
